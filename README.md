@@ -18,3 +18,5 @@ docker-compose.ymlの内容に従って、コンテナイメージをビルド�
 　docker compose up
 コンテナを起動します。
 -dオプションをつけるとバックグラウンドで起動します
+
+test
