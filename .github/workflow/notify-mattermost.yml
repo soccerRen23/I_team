@@ -1,26 +1,171 @@
-name: Notify to Mattermost
+name: Notify Mattermost
+
 on:
-  issues:              { types: [opened, edited, closed, reopened] }
+  issues:              { types: [opened, closed, reopened] }
+  pull_request:        { types: [opened, closed, reopened] }
   issue_comment:       { types: [created] }
-  pull_request:        { types: [opened, closed, reopened, ready_for_review] }
   pull_request_review: { types: [submitted] }
-  push:
+  pull_request_review_comment: { types: [created] }
 
 jobs:
   notify:
     runs-on: ubuntu-latest
     steps:
-      - name: Build and send
-        env:
+      - env:
           MM_WEBHOOK: ${{ secrets.MATTERMOST_WEBHOOK_URL }}
-          REPO:  ${{ github.repository }}
-          ACTOR: ${{ github.actor }}
-          EVENT: ${{ github.event_name }}
-          TITLE: ${{ replace((github.event.pull_request.title || github.event.issue.title || github.event.head_commit.message || ''), '"', '\\"') }}
-          URL:   ${{ github.event.pull_request.html_url || github.event.issue.html_url || github.event.compare || github.event.repository.html_url }}
-          BODY:  ${{ replace(replace((github.event.review.body || github.event.comment.body || ''), '\n', ' '), '"', '\\"') }}
+          REPO: ${{ github.repository }}
+        shell: bash
         run: |
-          read -r -d '' payload <<JSON
-          { "text": "[${REPO}] **${EVENT}** by **${ACTOR}** — ${TITLE}\n${URL}\n${BODY}" }
-          JSON
-          curl -sS -H 'Content-Type: application/json' -d "$payload" "$MM_WEBHOOK"
+          set -euo pipefail
+          EV="$GITHUB_EVENT_PATH"
+          ICON="https://github.githubassets.com/assets/GitHub-Mark-ea2971cee799.png"
+          REPO_URL="https://github.com/$REPO"
+          EVENT_NAME=$(jq -r '.action // ""' "$EV")
+          BASE_EVENT="${GITHUB_EVENT_NAME}"
+
+          COLOR_ISSUE="#2f7bba"
+          COLOR_PR="#2fba7b"
+          SKIP=""
+
+          if [ "$BASE_EVENT" = "issues" ]; then
+            KIND="ISSUE"
+            COLOR="$COLOR_ISSUE"
+            URL=$(jq -r '.issue.html_url' "$EV")
+            AUTHOR=$(jq -r '.issue.user.login' "$EV")
+            TITLE_TXT=$(jq -r '.issue.title' "$EV")
+            LINK="[$TITLE_TXT]($URL)"
+            case "$EVENT_NAME" in
+              opened)
+                STATUS="opened"
+                BODY="Issueが作成されました"
+                DESC=$(jq -r '.issue.body // ""' "$EV")
+                ;;
+              reopened)
+                STATUS="reopened"
+                BODY="Issueが再オープンされました"
+                DESC=""
+                ;;
+              closed)
+                STATUS="closed"
+                BODY="Issueがクローズされました"
+                DESC=$(jq -r '.comment.body // ""' "$EV")
+                ;;
+            esac
+
+          elif [ "$BASE_EVENT" = "pull_request" ]; then
+            KIND="PR"
+            COLOR="$COLOR_PR"
+            URL=$(jq -r '.pull_request.html_url' "$EV")
+            AUTHOR=$(jq -r '.pull_request.user.login' "$EV")
+            TITLE_TXT=$(jq -r '.pull_request.title' "$EV")
+            LINK="[$TITLE_TXT]($URL)"
+            MERGED=$(jq -r '.pull_request.merged' "$EV")
+            case "$EVENT_NAME" in
+              opened)
+                STATUS="opened"
+                BODY="Pull Requestが作成されました"
+                DESC=$(jq -r '.pull_request.body // ""' "$EV")
+                ;;
+              reopened)
+                STATUS="reopened"
+                BODY="Pull Requestが再オープンされました"
+                DESC=""
+                ;;
+              closed)
+                if [ "$MERGED" = "true" ]; then
+                  STATUS="merged"
+                  BODY="Pull Requestがマージされました"
+                else
+                  STATUS="closed"
+                  BODY="Pull Requestがクローズされました"
+                fi
+                DESC=$(jq -r '.comment.body // ""' "$EV")
+                ;;
+            esac
+
+          elif [ "$BASE_EVENT" = "issue_comment" ]; then
+            KIND="COMMENT"
+            URL=$(jq -r '.issue.html_url' "$EV")
+            AUTHOR=$(jq -r '.comment.user.login' "$EV")
+            BODY=$(jq -r '.comment.body // ""' "$EV")
+            if jq -e '.issue.pull_request? != null' "$EV" >/dev/null; then
+              STATUS="on PR"
+              COLOR="$COLOR_PR"
+            else
+              STATUS="on ISSUE"
+              COLOR="$COLOR_ISSUE"
+            fi
+            if [ -z "$BODY" ]; then
+              BODY=$(jq -r '.issue.body // ""' "$EV")
+            fi
+            TITLE_TXT=$(jq -r '.issue.title' "$EV")
+            LINK="[$TITLE_TXT]($URL)"
+
+          elif [ "$BASE_EVENT" = "pull_request_review_comment" ]; then
+            KIND="COMMENT"
+            STATUS="on PR"
+            COLOR="$COLOR_PR"
+            URL=$(jq -r '.pull_request.url' "$EV" | sed 's#api.github.com/repos/#https://github.com/#; s#/pulls/#/pull/#')
+            AUTHOR=$(jq -r '.comment.user.login' "$EV")
+            BODY=$(jq -r '.comment.body // ""' "$EV")
+            TITLE_TXT=$(jq -r '.pull_request.title // ""' "$EV")
+            LINK="[$TITLE_TXT]($URL)"
+
+          elif [ "$BASE_EVENT" = "pull_request_review" ]; then
+            KIND="COMMENT"
+            STATUS="on PR"
+            COLOR="$COLOR_PR"
+            URL=$(jq -r '.pull_request.html_url' "$EV")
+            AUTHOR=$(jq -r '.review.user.login' "$EV")
+            BODY=$(jq -r '.review.body // ""' "$EV")
+            TITLE_TXT=$(jq -r '.pull_request.title' "$EV")
+            LINK="[$TITLE_TXT]($URL)"
+            if [ -z "$BODY" ]; then
+              SKIP="1"
+            fi
+
+          else
+            KIND="COMMENT"
+            STATUS="on PR"
+            COLOR="$COLOR_PR"
+            raw=$(jq -r '.comment.pull_request_url' "$EV")
+            URL=${raw//api.github.com\/repos\//github.com\/}
+            URL=${URL//pulls\//pull\/}
+            AUTHOR=$(jq -r '.comment.user.login' "$EV")
+            BODY=$(jq -r '.comment.body // ""' "$EV")
+            TITLE_TXT=$(jq -r '.pull_request.title // ""' "$EV")
+            LINK="[$TITLE_TXT]($URL)"
+          fi
+
+          if [ -n "$SKIP" ]; then
+            exit 0
+          fi
+
+          if [ "$KIND" = "ISSUE" ] || [ "$KIND" = "PR" ]; then
+            if [ -n "${DESC:-}" ]; then
+              QUOTED_DESC=$(printf '%s\n' "$DESC" | sed 's/^/> /')
+              TEXT="$(printf "%s\n\n%s" "$BODY" "$QUOTED_DESC")"
+            else
+              TEXT="$BODY"
+            fi
+          else
+            TEXT="$BODY"
+          fi
+
+          TITLE="[$REPO] [$KIND] $STATUS by $AUTHOR $LINK"
+
+          jq -n \
+            --arg icon "$ICON" \
+            --arg title "$TITLE" \
+            --arg text "$TEXT" \
+            --arg color "$COLOR" \
+            '{
+              username: "github",
+              icon_url: $icon,
+              attachments: [{
+                title: $title,
+                text: $text,
+                color: $color
+              }]
+            }' \
+          | curl -sS -H "Content-Type: application/json" -d @- "$MM_WEBHOOK"
