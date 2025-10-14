@@ -1,0 +1,26 @@
+name: Notify to Mattermost
+on:
+  issues:              { types: [opened, edited, closed, reopened] }
+  issue_comment:       { types: [created] }
+  pull_request:        { types: [opened, closed, reopened, ready_for_review] }
+  pull_request_review: { types: [submitted] }
+  push:
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Build and send
+        env:
+          MM_WEBHOOK: ${{ secrets.MATTERMOST_WEBHOOK_URL }}
+          REPO:  ${{ github.repository }}
+          ACTOR: ${{ github.actor }}
+          EVENT: ${{ github.event_name }}
+          TITLE: ${{ replace((github.event.pull_request.title || github.event.issue.title || github.event.head_commit.message || ''), '"', '\\"') }}
+          URL:   ${{ github.event.pull_request.html_url || github.event.issue.html_url || github.event.compare || github.event.repository.html_url }}
+          BODY:  ${{ replace(replace((github.event.review.body || github.event.comment.body || ''), '\n', ' '), '"', '\\"') }}
+        run: |
+          read -r -d '' payload <<JSON
+          { "text": "[${REPO}] **${EVENT}** by **${ACTOR}** — ${TITLE}\n${URL}\n${BODY}" }
+          JSON
+          curl -sS -H 'Content-Type: application/json' -d "$payload" "$MM_WEBHOOK"
