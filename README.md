@@ -1,4 +1,4 @@
-# I_team
+# SpartanChat
 
 (1)環境変数ファイル(.env)ファイルを作成します
 
@@ -18,3 +18,4 @@ docker-compose.ymlの内容に従って、コンテナイメージをビルド�
 　docker compose up
 コンテナを起動します。
 -dオプションをつけるとバックグラウンドで起動します
+
